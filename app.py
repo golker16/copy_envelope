@@ -128,7 +128,9 @@ class MainWin(QWidget):
         self.player = QMediaPlayer(self)
         self.audio = QAudioOutput(self)
         self.player.setAudioOutput(self.audio)
+        self.audio.setVolume(0.9)
         self._duration = 0
+        self._autoplay_pending = False
 
         # Optional window icon si existe (assets/app.png)
         icon_path = Path("assets/app.png")
@@ -269,6 +271,11 @@ class MainWin(QWidget):
         self.btn_stop.clicked.connect(self.on_stop)
         self.player.positionChanged.connect(self.on_pos_changed)
         self.player.durationChanged.connect(self.on_dur_changed)
+        self.player.mediaStatusChanged.connect(self.on_media_status)
+        try:
+            self.player.errorOccurred.connect(self.on_media_error)
+        except Exception:
+            pass
         self.sld_pos.sliderMoved.connect(self.player.setPosition)
         self.mold_list.currentItemChanged.connect(self.on_mold_item_changed)
         self.mold_list.itemDoubleClicked.connect(lambda _: self.on_play())
@@ -332,6 +339,11 @@ class MainWin(QWidget):
 
     def _load_player_source(self, path: Path):
         try:
+            # detener antes de cambiar de source para evitar cuelgues en algunos backends
+            try:
+                self.player.stop()
+            except Exception:
+                pass
             self.player.setSource(QUrl.fromLocalFile(str(path)))
             self.sld_pos.setRange(0, 0)
             self.lbl_time.setText("00:00 / 00:00")
@@ -341,13 +353,14 @@ class MainWin(QWidget):
     def on_mold_item_changed(self, curr, prev):
         if curr:
             p = Path(curr.text())
+            # marcar autoplay diferido hasta que el medio esté cargado
+            self._autoplay_pending = bool(self.chk_autoplay.isChecked())
             self._load_player_source(p)
-            if self.chk_autoplay.isChecked():
-                self.on_play()
 
     def on_play(self):
         try:
             self.player.play()
+            self._autoplay_pending = False
         except Exception as e:
             self.append_log(f"[Audio] play() error: {e}")
 
@@ -381,7 +394,30 @@ class MainWin(QWidget):
         except Exception:
             pass
 
+    def on_media_status(self, status):
+        # Solo auto-reproducir cuando el medio ya está cargado/bufferizado
+        try:
+            if int(status) in (int(QMediaPlayer.LoadedMedia), int(QMediaPlayer.BufferedMedia)):
+                if self._autoplay_pending:
+                    self.on_play()
+        except Exception:
+            pass
+
+    def on_media_error(self, *args):
+        try:
+            # PySide6 cambia la firma entre versiones; mostramos lo que tengamos
+            err_text = None
+            if hasattr(self.player, 'errorString'):
+                err_text = self.player.errorString()
+            self.append_log(f"[Audio] error: {args} {('-> ' + err_text) if err_text else ''}")
+        except Exception:
+            pass
+
     def pick_random_n(self):
+        try:
+            self.player.stop()
+        except Exception:
+            pass
         self.refresh_current_folder(pick_random=True)
 
     def pick_dest_file(self):
