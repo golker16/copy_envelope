@@ -1,6 +1,7 @@
 import os
 import sys
 import random
+import re
 from pathlib import Path
 import traceback
 
@@ -9,9 +10,10 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFileDialog, QListWidget, QListWidgetItem, QPlainTextEdit, QProgressBar,
-    QGroupBox, QLineEdit, QFormLayout, QMessageBox, QComboBox, QSpinBox
+    QGroupBox, QLineEdit, QFormLayout, QMessageBox, QComboBox, QSpinBox, QCheckBox, QSlider
 )
 from PySide6.QtGui import QDesktopServices
+from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 # Try to load QDarkStyle if available
 _HAS_QDARK = False
@@ -64,6 +66,14 @@ def ensure_genre_dirs() -> None:
     for g in GENRES:
         (gdir / g).mkdir(parents=True, exist_ok=True)
 
+# Utilidad: slug para nombres de archivo
+def _slug(s: str, max_len: int = 30) -> str:
+    s = s.lower().strip()
+    # permite letras/números/_ - + ; reemplaza el resto por '-'
+    s = ''.join(ch if (ch.isalnum() or ch in ['_', '-', '+']) else '-' for ch in s)
+    s = re.sub('-{2,}', '-', s)
+    return s[:max_len].strip('-_')
+
 # ---------------- Widgets ----------------
 class ReadOnlyList(QListWidget):
     """Solo muestra rutas; sin drag&drop del usuario."""
@@ -109,10 +119,16 @@ class Worker(QThread):
 class MainWin(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Copy Envelope 2")
+        self.setWindowTitle("Copy Envelope")
 
         # Crear carpetas de géneros si no existen
         ensure_genre_dirs()
+
+        # Inicializar reproductor multimedia
+        self.player = QMediaPlayer(self)
+        self.audio = QAudioOutput(self)
+        self.player.setAudioOutput(self.audio)
+        self._duration = 0
 
         # Optional window icon si existe (assets/app.png)
         icon_path = Path("assets/app.png")
@@ -163,6 +179,28 @@ class MainWin(QWidget):
 
         self.mold_list = ReadOnlyList()
         lg.addWidget(self.mold_list)
+
+        # --- Reproductor (QtMultimedia) ---
+        g_player = QGroupBox("Pre-escucha")
+        lp = QVBoxLayout(g_player)
+        ctl = QHBoxLayout()
+        self.btn_play = QPushButton("▶︎")
+        self.btn_pause = QPushButton("⏸")
+        self.btn_stop = QPushButton("⏹")
+        ctl.addWidget(self.btn_play)
+        ctl.addWidget(self.btn_pause)
+        ctl.addWidget(self.btn_stop)
+        self.chk_autoplay = QCheckBox("Auto reproducir al seleccionar")
+        self.chk_autoplay.setChecked(True)
+        ctl.addWidget(self.chk_autoplay, 1)
+        lp.addLayout(ctl)
+        self.sld_pos = QSlider(Qt.Horizontal)
+        self.sld_pos.setRange(0, 0)
+        lp.addWidget(self.sld_pos)
+        self.lbl_time = QLabel("00:00 / 00:00")
+        lp.addWidget(self.lbl_time)
+        lg.addWidget(g_player)
+
         root.addWidget(g_gen)
 
         # --- Destino ---
@@ -199,6 +237,9 @@ class MainWin(QWidget):
         lf.addRow("Combine mode:", self.ed_combine)
         lf.addRow("Weights (coma):", self.ed_weights)
         lf.addRow("Archivo de salida:", self.ed_out)
+        self.chk_auto_name = QCheckBox("Auto-nombrar salida (destino + moldes)")
+        self.chk_auto_name.setChecked(True)
+        lf.addRow(self.chk_auto_name)
         root.addWidget(g_cfg)
 
         # Progreso & Logs
@@ -222,6 +263,15 @@ class MainWin(QWidget):
         btn_dest.clicked.connect(self.pick_dest_file)
         btn_clear_d.clicked.connect(self.dest_list.clear)
         self.btn_run.clicked.connect(self.on_run)
+        # Reproductor
+        self.btn_play.clicked.connect(self.on_play)
+        self.btn_pause.clicked.connect(self.on_pause)
+        self.btn_stop.clicked.connect(self.on_stop)
+        self.player.positionChanged.connect(self.on_pos_changed)
+        self.player.durationChanged.connect(self.on_dur_changed)
+        self.sld_pos.sliderMoved.connect(self.player.setPosition)
+        self.mold_list.currentItemChanged.connect(self.on_mold_item_changed)
+        self.mold_list.itemDoubleClicked.connect(lambda _: self.on_play())
 
         # Inicializar con el primer género
         self.on_genre_changed()
@@ -272,6 +322,65 @@ class MainWin(QWidget):
             chosen = random.sample(files, n)
         self.mold_list.set_paths(chosen)
 
+    # -------- Reproductor --------
+    def _fmt_ms(self, ms: int) -> str:
+        ms = int(ms or 0)
+        s = ms // 1000
+        m = s // 60
+        s = s % 60
+        return f"{m:02}:{s:02}"
+
+    def _load_player_source(self, path: Path):
+        try:
+            self.player.setSource(QUrl.fromLocalFile(str(path)))
+            self.sld_pos.setRange(0, 0)
+            self.lbl_time.setText("00:00 / 00:00")
+        except Exception as e:
+            self.append_log(f"[Audio] No se pudo cargar: {path} -> {e}")
+
+    def on_mold_item_changed(self, curr, prev):
+        if curr:
+            p = Path(curr.text())
+            self._load_player_source(p)
+            if self.chk_autoplay.isChecked():
+                self.on_play()
+
+    def on_play(self):
+        try:
+            self.player.play()
+        except Exception as e:
+            self.append_log(f"[Audio] play() error: {e}")
+
+    def on_pause(self):
+        try:
+            self.player.pause()
+        except Exception as e:
+            self.append_log(f"[Audio] pause() error: {e}")
+
+    def on_stop(self):
+        try:
+            self.player.stop()
+        except Exception as e:
+            self.append_log(f"[Audio] stop() error: {e}")
+
+    def on_pos_changed(self, pos):
+        try:
+            self.sld_pos.blockSignals(True)
+            self.sld_pos.setValue(int(pos))
+            self.sld_pos.blockSignals(False)
+            dur = int(self.player.duration())
+            self.lbl_time.setText(f"{self._fmt_ms(pos)} / {self._fmt_ms(dur)}")
+        except Exception:
+            pass
+
+    def on_dur_changed(self, dur):
+        try:
+            self._duration = int(dur)
+            self.sld_pos.setRange(0, self._duration)
+            self.lbl_time.setText(f"{self._fmt_ms(self.player.position())} / {self._fmt_ms(dur)}")
+        except Exception:
+            pass
+
     def pick_random_n(self):
         self.refresh_current_folder(pick_random=True)
 
@@ -294,7 +403,19 @@ class MainWin(QWidget):
             return
         dest = dests[0]
         out = self.ed_out.text().strip()
-        if not out:
+        # Determinar extensión (por defecto .wav si no se especifica)
+        ext = Path(out).suffix if out else ".wav"
+        if self.chk_auto_name.isChecked():
+            # Carpeta de salida: si el campo tiene ruta, usar su carpeta; si no, junto al destino
+            out_dir = Path(out).parent if out else Path(dest).parent
+            out_dir.mkdir(parents=True, exist_ok=True)
+            dest_base = _slug(Path(dest).stem, 20)
+            mold_names = [_slug(Path(p).stem, 12) for p in molds]
+            mold_part = "+".join(mold_names)
+            if len(mold_part) > 40:
+                mold_part = mold_part[:40]
+            out = str(out_dir / f"{dest_base}__{mold_part}{ext}")
+        elif not out:
             QMessageBox.warning(self, "Falta salida", "Especifica el archivo de salida (ej: salida.wav).")
             return
 
