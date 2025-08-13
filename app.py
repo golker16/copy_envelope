@@ -109,7 +109,7 @@ class Worker(QThread):
 class MainWin(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Copy Envelope")
+        self.setWindowTitle("Copy Envelope 2")
 
         # Crear carpetas de géneros si no existen
         ensure_genre_dirs()
