@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 import traceback
 
-from PySide6.QtCore import Qt, QThread, Signal, QUrl
+from PySide6.QtCore import Qt, QThread, Signal, QUrl, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -269,14 +269,7 @@ class MainWin(QWidget):
         self.btn_play.clicked.connect(self.on_play)
         self.btn_pause.clicked.connect(self.on_pause)
         self.btn_stop.clicked.connect(self.on_stop)
-        self.player.positionChanged.connect(self.on_pos_changed)
-        self.player.durationChanged.connect(self.on_dur_changed)
-        self.player.mediaStatusChanged.connect(self.on_media_status)
-        try:
-            self.player.errorOccurred.connect(self.on_media_error)
-        except Exception:
-            pass
-        self.sld_pos.sliderMoved.connect(self.player.setPosition)
+        self._connect_player_signals()
         self.mold_list.currentItemChanged.connect(self.on_mold_item_changed)
         self.mold_list.itemDoubleClicked.connect(lambda _: self.on_play())
 
@@ -330,6 +323,47 @@ class MainWin(QWidget):
         self.mold_list.set_paths(chosen)
 
     # -------- Reproductor --------
+    def _connect_player_signals(self):
+        try:
+            self.player.positionChanged.connect(self.on_pos_changed)
+            self.player.durationChanged.connect(self.on_dur_changed)
+            self.player.mediaStatusChanged.connect(self.on_media_status)
+            try:
+                self.player.errorOccurred.connect(self.on_media_error)
+            except Exception:
+                pass
+            try:
+                self.sld_pos.sliderMoved.disconnect()
+            except Exception:
+                pass
+            self.sld_pos.sliderMoved.connect(self.player.setPosition)
+        except Exception as e:
+            self.append_log(f"[Audio] conectar señales: {e}")
+
+    def _recreate_player(self):
+        try:
+            vol = self.audio.volume() if hasattr(self, 'audio') and self.audio else 0.9
+        except Exception:
+            vol = 0.9
+        try:
+            self.player.stop()
+        except Exception:
+            pass
+        try:
+            self.player.deleteLater()
+        except Exception:
+            pass
+        try:
+            self.audio.deleteLater()
+        except Exception:
+            pass
+        self.player = QMediaPlayer(self)
+        self.audio = QAudioOutput(self)
+        self.audio.setVolume(vol)
+        self.player.setAudioOutput(self.audio)
+        self._duration = 0
+        self._autoplay_pending = False
+        self._connect_player_signals()
     def _fmt_ms(self, ms: int) -> str:
         ms = int(ms or 0)
         s = ms // 1000
@@ -339,14 +373,14 @@ class MainWin(QWidget):
 
     def _load_player_source(self, path: Path):
         try:
-            # detener antes de cambiar de source para evitar cuelgues en algunos backends
-            try:
-                self.player.stop()
-            except Exception:
-                pass
+            # recrear completamente el reproductor para evitar estados colgados del backend
+            self._recreate_player()
             self.player.setSource(QUrl.fromLocalFile(str(path)))
             self.sld_pos.setRange(0, 0)
             self.lbl_time.setText("00:00 / 00:00")
+            # fallback: si hay autoplay marcado, intentar play tras breve retardo por si el backend tarda en cargar
+            if self._autoplay_pending:
+                QTimer.singleShot(200, self.on_play)
         except Exception as e:
             self.append_log(f"[Audio] No se pudo cargar: {path} -> {e}")
 
@@ -446,7 +480,7 @@ class MainWin(QWidget):
             out_dir = Path(out).parent if out else Path(dest).parent
             out_dir.mkdir(parents=True, exist_ok=True)
             dest_base = _slug(Path(dest).stem, 20)
-            mold_names = [_slug(Path(p).stem, 12) for p in molds]
+            mold_names = [(_slug(Path(p).stem, 12)[:4] or 'xxxx') for p in molds]
             mold_part = "+".join(mold_names)
             if len(mold_part) > 40:
                 mold_part = mold_part[:40]
