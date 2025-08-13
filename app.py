@@ -1,15 +1,17 @@
 import os
 import sys
+import random
 from pathlib import Path
 import traceback
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal, QUrl
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFileDialog, QListWidget, QListWidgetItem, QPlainTextEdit, QProgressBar,
-    QGroupBox, QLineEdit, QFormLayout, QMessageBox
+    QGroupBox, QLineEdit, QFormLayout, QMessageBox, QComboBox, QSpinBox
 )
+from PySide6.QtGui import QDesktopServices
 
 # Try to load QDarkStyle if available
 _HAS_QDARK = False
@@ -24,18 +26,60 @@ try:
     from engine import apply_envelopes
 except Exception as e:
     def apply_envelopes(dest_path, mold_paths, out_path, cfg, progress_cb, log_cb):
-        log_cb("[WARN] engine.apply_envelopes not found, copying destination as dummy output.")
+        log_cb("[WARN] engine.apply_envelopes no encontrado, se copia el destino como salida dummy.")
         import shutil, time
         total = max(1, len(mold_paths))
         for i, p in enumerate(mold_paths, start=1):
             time.sleep(0.1)
             progress_cb(int(i * 80 / total))
-            log_cb(f"Using dummy mold: {Path(p).name}")
+            log_cb(f"Molde dummy: {Path(p).name}")
         shutil.copy2(dest_path, out_path)
         progress_cb(100)
-        log_cb(f"Done. (Output: {out_path})")
+        log_cb(f"Listo. (Salida: {out_path})")
 
 AUDIO_EXTS = {'.wav', '.mp3', '.flac', '.ogg', '.m4a', '.aiff', '.aif'}
+GENRES = [
+    "pop", "rock", "r&b", "house", "trap", "reggaeton",
+    "afrobeat", "brasil funk", "funk", "soul", "jazz",
+]
+
+# ---------------- utilidades de ruta ----------------
+def _base_dir_for_data() -> Path:
+    """Dónde crear/leer las carpetas de géneros.
+    - En PyInstaller onedir: junto al .exe
+    - En dev: junto a este archivo
+    """
+    if getattr(sys, 'frozen', False):
+        # Ejecutándose empaquetado
+        return Path(sys.executable).parent
+    else:
+        return Path(__file__).parent
+
+def app_genres_dir() -> Path:
+    return _base_dir_for_data() / "genres"
+
+def ensure_genre_dirs() -> None:
+    gdir = app_genres_dir()
+    gdir.mkdir(parents=True, exist_ok=True)
+    for g in GENRES:
+        (gdir / g).mkdir(parents=True, exist_ok=True)
+
+# ---------------- Widgets ----------------
+class ReadOnlyList(QListWidget):
+    """Solo muestra rutas; sin drag&drop del usuario."""
+    def __init__(self):
+        super().__init__()
+        self.setAcceptDrops(False)
+        self.setMinimumHeight(120)
+        self.setAlternatingRowColors(True)
+
+    def set_paths(self, paths):
+        self.clear()
+        for p in paths:
+            self.addItem(QListWidgetItem(str(p)))
+
+    def paths(self):
+        return [self.item(i).text() for i in range(self.count())]
 
 class Worker(QThread):
     progressed = Signal(int)
@@ -54,104 +98,79 @@ class Worker(QThread):
         try:
             def _p(v): self.progressed.emit(int(v))
             def _l(msg): self.logged.emit(str(msg))
-            _l("Starting processing…")
+            _l("Iniciando procesamiento…")
             apply_envelopes(self.dest_path, self.mold_paths, self.out_path, self.cfg, _p, _l)
             self.finished_ok.emit(self.out_path)
         except Exception as e:
             tb = traceback.format_exc()
             self.failed.emit(tb)
 
-class DropList(QListWidget):
-    def __init__(self, allow_multiple=True):
-        super().__init__()
-        self.setAcceptDrops(True)
-        self.allow_multiple = allow_multiple
-        self.setMinimumHeight(120)
-        self.setAlternatingRowColors(True)
-
-    def dragEnterEvent(self, e):
-        if e.mimeData().hasUrls():
-            e.acceptProposedAction()
-        else:
-            super().dragEnterEvent(e)
-
-    def dragMoveEvent(self, e):
-        e.acceptProposedAction()
-
-    def dropEvent(self, e):
-        for url in e.mimeData().urls():
-            p = Path(url.toLocalFile())
-            if p.is_dir():
-                for child in sorted(p.iterdir()):
-                    if child.suffix.lower() in AUDIO_EXTS:
-                        self._add_path(child)
-            else:
-                if p.suffix.lower() in AUDIO_EXTS:
-                    self._add_path(p)
-        e.acceptProposedAction()
-
-    def _add_path(self, p: Path):
-        if not self.allow_multiple:
-            self.clear()
-        it = QListWidgetItem(str(p))
-        self.addItem(it)
-
-    def paths(self):
-        out = []
-        for i in range(self.count()):
-            out.append(self.item(i).text())
-        return out
-
+# ---------------- Ventana principal ----------------
 class MainWin(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Copy Envelope")
 
-        # Optional window icon if present (user can add assets/app.png later)
-        icon_path = Path("assets/app.png")  # PNG for window icon
+        # Crear carpetas de géneros si no existen
+        ensure_genre_dirs()
+
+        # Optional window icon si existe (assets/app.png)
+        icon_path = Path("assets/app.png")
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
 
         root = QVBoxLayout(self)
 
-        # Description text
-        desc = QLabel("""
-        <b>Descripción</b><br>
-        Este programa toma uno o varios audios “molde” y extrae su
-        envolvente de volumen (la curva de subidas y bajadas de intensidad)
-        para aplicarla sobre otro audio “destino”.
-        """.strip())
+        # Descripción
+        desc = QLabel(
+            """
+            <b>Descripción</b><br>
+            Selecciona un <i>género</i>. El programa elegirá por defecto 3 samples al azar de la carpeta del género
+            (puedes abrir esa carpeta y añadir/quitar archivos cuando quieras). Luego aplica la envolvente combinada
+            al archivo de <i>destino</i>.
+            """.strip()
+        )
         desc.setWordWrap(True)
         root.addWidget(desc)
 
         copyright = QLabel("© 2025 Gabriel Golker")
         root.addWidget(copyright)
 
-        # Mold group
-        g_molds = QGroupBox("Moldes (arrastra archivos sueltos o una carpeta)")
-        lm = QVBoxLayout(g_molds)
-        self.mold_list = DropList(allow_multiple=True)
-        lm.addWidget(self.mold_list)
+        # --- Fuente de moldes: Género + control de carpeta ---
+        g_gen = QGroupBox("Fuente de moldes por género")
+        lg = QVBoxLayout(g_gen)
 
-        btns_m = QHBoxLayout()
-        btn_add_files = QPushButton("Añadir archivos…")
-        btn_add_folder = QPushButton("Añadir carpeta…")
-        btn_clear_m = QPushButton("Limpiar")
-        btns_m.addWidget(btn_add_files)
-        btns_m.addWidget(btn_add_folder)
-        btns_m.addWidget(btn_clear_m)
-        lm.addLayout(btns_m)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Género:"))
+        self.cb_genre = QComboBox()
+        self.cb_genre.addItems(GENRES)
+        row.addWidget(self.cb_genre, 1)
 
-        btn_add_files.clicked.connect(self.pick_mold_files)
-        btn_add_folder.clicked.connect(self.pick_mold_folder)
-        btn_clear_m.clicked.connect(self.mold_list.clear)
+        row.addWidget(QLabel("Cantidad:"))
+        self.spn_count = QSpinBox()
+        self.spn_count.setRange(1, 50)
+        self.spn_count.setValue(3)
+        row.addWidget(self.spn_count)
 
-        root.addWidget(g_molds)
+        self.btn_open_folder = QPushButton("Abrir carpeta…")
+        self.btn_pick_random = QPushButton("Elegir N al azar")
+        self.btn_refresh = QPushButton("Refrescar")
+        row.addWidget(self.btn_open_folder)
+        row.addWidget(self.btn_pick_random)
+        row.addWidget(self.btn_refresh)
 
-        # Destination
+        lg.addLayout(row)
+
+        self.mold_list = ReadOnlyList()
+        lg.addWidget(self.mold_list)
+        root.addWidget(g_gen)
+
+        # --- Destino ---
         g_dest = QGroupBox("Destino (arrastra o elige un archivo)")
         ld = QVBoxLayout(g_dest)
-        self.dest_list = DropList(allow_multiple=False)
+        self.dest_list = QListWidget()
+        self.dest_list.setAcceptDrops(True)
+        self.dest_list.setMinimumHeight(60)
         ld.addWidget(self.dest_list)
         btn_dest = QPushButton("Elegir destino…")
         btn_clear_d = QPushButton("Limpiar")
@@ -159,20 +178,18 @@ class MainWin(QWidget):
         bdh.addWidget(btn_dest)
         bdh.addWidget(btn_clear_d)
         ld.addLayout(bdh)
-        btn_dest.clicked.connect(self.pick_dest_file)
-        btn_clear_d.clicked.connect(self.dest_list.clear)
         root.addWidget(g_dest)
 
-        # Quick config
+        # --- Config rápida (mismo comportamiento que antes) ---
         g_cfg = QGroupBox("Configuración rápida")
         lf = QFormLayout(g_cfg)
         self.ed_bpm = QLineEdit("100")
         self.ed_attack = QLineEdit("1.0")
         self.ed_release = QLineEdit("0.5")
         self.ed_floor_db = QLineEdit("-40.0")
-        self.ed_mode = QLineEdit("hilbert")  # 'hilbert' or 'rms'
+        self.ed_mode = QLineEdit("hilbert")  # 'hilbert' o 'rms'
         self.ed_combine = QLineEdit("max")   # max/mean/geom_mean/product/sum_limited/weighted
-        self.ed_weights = QLineEdit("")      # optional: comma-separated weights
+        self.ed_weights = QLineEdit("")      # pesos opcionales separados por coma
         self.ed_out = QLineEdit(str(Path.cwd() / "salida.wav"))
         lf.addRow("BPM:", self.ed_bpm)
         lf.addRow("Attack ms:", self.ed_attack)
@@ -184,53 +201,94 @@ class MainWin(QWidget):
         lf.addRow("Archivo de salida:", self.ed_out)
         root.addWidget(g_cfg)
 
-        # Progress & Logs
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 100)
+        # Progreso & Logs
+        self.progress = QProgressBar(); self.progress.setRange(0, 100)
         root.addWidget(self.progress)
 
-        self.logs = QPlainTextEdit()
-        self.logs.setReadOnly(True)
-        self.logs.setMaximumBlockCount(5000)
+        self.logs = QPlainTextEdit(); self.logs.setReadOnly(True); self.logs.setMaximumBlockCount(5000)
         root.addWidget(self.logs)
 
-        # Action buttons
+        # Botón procesar
         hb = QHBoxLayout()
         self.btn_run = QPushButton("Procesar")
-        self.btn_run.clicked.connect(self.on_run)
         hb.addWidget(self.btn_run)
         root.addLayout(hb)
 
+        # Señales
+        self.cb_genre.currentIndexChanged.connect(self.on_genre_changed)
+        self.btn_open_folder.clicked.connect(self.on_open_folder)
+        self.btn_pick_random.clicked.connect(self.pick_random_n)
+        self.btn_refresh.clicked.connect(self.refresh_current_folder)
+        btn_dest.clicked.connect(self.pick_dest_file)
+        btn_clear_d.clicked.connect(self.dest_list.clear)
+        self.btn_run.clicked.connect(self.on_run)
+
+        # Inicializar con el primer género
+        self.on_genre_changed()
+
         self.worker = None
 
+    # -------- utilidades de UI --------
     def append_log(self, text):
         self.logs.appendPlainText(text)
 
-    def pick_mold_files(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "Elegir moldes", str(Path.cwd()),
-                                               "Audio (*.wav *.mp3 *.flac *.ogg *.m4a *.aiff *.aif)")
-        for f in files:
-            self.mold_list._add_path(Path(f))
+    def _current_genre_dir(self) -> Path:
+        return app_genres_dir() / self.cb_genre.currentText()
 
-    def pick_mold_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Elegir carpeta de moldes", str(Path.cwd()))
-        if folder:
-            for child in sorted(Path(folder).iterdir()):
-                if child.suffix.lower() in AUDIO_EXTS:
-                    self.mold_list._add_path(child)
+    def _list_audio_files(self, folder: Path):
+        files = []
+        if folder.exists():
+            for child in sorted(folder.iterdir()):
+                if child.is_file() and child.suffix.lower() in AUDIO_EXTS:
+                    files.append(child)
+        return files
+
+    def on_genre_changed(self):
+        self.refresh_current_folder(pick_random=True)
+
+    def on_open_folder(self):
+        folder = self._current_genre_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+    def refresh_current_folder(self, pick_random=False):
+        folder = self._current_genre_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        files = self._list_audio_files(folder)
+        if pick_random:
+            self._set_random_n(files, self.spn_count.value())
+        else:
+            self.mold_list.set_paths(files)
+
+    def _set_random_n(self, files, n):
+        if not files:
+            self.mold_list.clear()
+            QMessageBox.warning(self, "Sin samples", "No hay archivos de audio en la carpeta del género seleccionado.")
+            return
+        n = max(1, int(n))
+        if len(files) <= n:
+            chosen = files
+        else:
+            chosen = random.sample(files, n)
+        self.mold_list.set_paths(chosen)
+
+    def pick_random_n(self):
+        self.refresh_current_folder(pick_random=True)
 
     def pick_dest_file(self):
         f, _ = QFileDialog.getOpenFileName(self, "Elegir destino", str(Path.cwd()),
                                           "Audio (*.wav *.mp3 *.flac *.ogg *.m4a *.aiff *.aif)")
         if f:
-            self.dest_list._add_path(Path(f))
+            self.dest_list.clear()
+            self.dest_list.addItem(QListWidgetItem(f))
 
+    # -------- ejecutar --------
     def on_run(self):
         molds = self.mold_list.paths()
         if not molds:
-            QMessageBox.warning(self, "Faltan moldes", "Agrega al menos un molde (archivo o carpeta).")
+            QMessageBox.warning(self, "Faltan moldes", "No hay moldes seleccionados (revisa la carpeta del género).")
             return
-        dests = self.dest_list.paths()
+        dests = [self.dest_list.item(i).text() for i in range(self.dest_list.count())]
         if not dests:
             QMessageBox.warning(self, "Falta destino", "Elige el archivo destino.")
             return
@@ -278,14 +336,16 @@ class MainWin(QWidget):
         self.append_log(tb)
         QMessageBox.critical(self, "Error", "Ocurrió un error. Revisa los logs.")
 
+# ---------------- main ----------------
 def main():
     app = QApplication(sys.argv)
     if _HAS_QDARK:
         app.setStyleSheet(qdarkstyle.load_stylesheet_pyside6())
     win = MainWin()
-    win.resize(900, 760)
+    win.resize(900, 780)
     win.show()
     sys.exit(app.exec())
 
 if __name__ == "__main__":
     main()
+
