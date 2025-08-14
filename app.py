@@ -399,7 +399,7 @@ class MainWin(QWidget):
         # Señales (Género)
         self.cb_genre.currentIndexChanged.connect(self.on_genre_changed)
         self.btn_open_folder.clicked.connect(self.on_open_folder)
-        self.btn_pick_random.clicked.connect(self.pick_random_n)
+        self.btn_pick_random.clicked.connect(self.pick_random_n)  # <-- ahora existe
         self.btn_refresh.clicked.connect(self.refresh_current_folder)
 
         # Señales (Básico)
@@ -497,6 +497,14 @@ class MainWin(QWidget):
         n = max(1, int(n))
         chosen = files if len(files) <= n else random.sample(files, n)
         self.mold_list.set_paths(chosen)
+
+    # ---- FALTABA: botón Elegir N al azar ----
+    def pick_random_n(self):
+        try:
+            self.player.stop()
+        except Exception:
+            pass
+        self.refresh_current_folder(pick_random=True)
 
     # -------- Básico: añadir archivos/carpeta --------
     def basic_add_files(self):
@@ -662,7 +670,7 @@ class MainWin(QWidget):
             try:
                 weights = [float(x) for x in wtxt.split(",")]
             except Exception:
-                QMessageBox.warning(self, "Weights inválidos", "Usa números separados por coma, ej: 1,0.8,1.2")
+                QMessageBox.warning(self, "Weights inválidos", "Usa números separados por coma, ej: 1,0.8,1,2")
                 return
 
         cfg = {
@@ -731,6 +739,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
 
