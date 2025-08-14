@@ -253,7 +253,7 @@ class MainWin(QWidget):
         self._duration = 0
         self._autoplay_pending = False
 
-        icon_path = Path("assets/app.png")
+        icon_path = Path("assets/app.ico")
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
 
