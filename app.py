@@ -68,9 +68,34 @@ def _slug(s: str, max_len: int = 30) -> str:
     s = re.sub('-{2,}', '-', s)
     return s[:max_len].strip('-_')
 
+def _is_audio_file(p: Path) -> bool:
+    try:
+        return p.is_file() and p.suffix.lower() in AUDIO_EXTS
+    except Exception:
+        return False
+
+def _collect_audios_from_dir(folder: Path, recursive: bool = True):
+    files = []
+    try:
+        if recursive:
+            for ext in AUDIO_EXTS:
+                files.extend(sorted(folder.rglob(f"*{ext}")))
+        else:
+            for child in sorted(folder.iterdir()):
+                if _is_audio_file(child):
+                    files.append(child)
+    except Exception:
+        pass
+    seen = set(); uniq = []
+    for f in files:
+        if f not in seen:
+            seen.add(f)
+            uniq.append(f)
+    return uniq
+
 # ---------------- Widgets ----------------
 class ReadOnlyList(QListWidget):
-    """Solo muestra rutas; sin drag&drop del usuario."""
+    """Solo muestra rutas (moldes por género)."""
     def __init__(self):
         super().__init__()
         self.setAcceptDrops(False)
@@ -85,15 +110,68 @@ class ReadOnlyList(QListWidget):
     def paths(self):
         return [self.item(i).text() for i in range(self.count())]
 
+class BasicMoldList(QListWidget):
+    """Lista para moldes ad-hoc: acepta archivos y carpetas (recursivo)."""
+    def __init__(self):
+        super().__init__()
+        self.setAcceptDrops(True)
+        self.setMinimumHeight(120)
+        self.setAlternatingRowColors(True)
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.setDragEnabled(False)
+        self.setDragDropMode(QAbstractItemView.DropOnly)
+        self.setDefaultDropAction(Qt.CopyAction)
+        self.setDropIndicatorShown(True)
+
+    def _urls_to_paths(self, urls):
+        paths = []
+        for url in urls:
+            p = Path(url.toLocalFile())
+            if not p.exists():
+                continue
+            if p.is_dir():
+                paths.extend(_collect_audios_from_dir(p, recursive=True))
+            elif _is_audio_file(p):
+                paths.append(p)
+        return paths
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls() and self._urls_to_paths(event.mimeData().urls()):
+            event.setDropAction(Qt.CopyAction); event.accept()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls():
+            new_paths = self._urls_to_paths(event.mimeData().urls())
+            if new_paths:
+                self.add_files(new_paths)
+                event.setDropAction(Qt.CopyAction); event.accept(); return
+        event.ignore()
+
+    def add_files(self, paths):
+        existing = set(self.paths()); added = 0
+        for p in paths:
+            sp = str(p)
+            if sp not in existing:
+                self.addItem(QListWidgetItem(sp))
+                existing.add(sp); added += 1
+        return added
+
+    def paths(self):
+        return [self.item(i).text() for i in range(self.count())]
+
 class DestDropList(QListWidget):
-    """Lista que acepta arrastrar y soltar archivos de audio como 'destino'."""
+    """Lista que acepta arrastrar y soltar archivo destino."""
     def __init__(self):
         super().__init__()
         self.setAcceptDrops(True)
         self.setMinimumHeight(60)
         self.setAlternatingRowColors(True)
         self.setSelectionMode(QAbstractItemView.SingleSelection)
-        # Aceptar SOLO drops externos (no arrastres internos)
         self.setDragEnabled(False)
         self.setDragDropMode(QAbstractItemView.DropOnly)
         self.setDefaultDropAction(Qt.CopyAction)
@@ -102,14 +180,13 @@ class DestDropList(QListWidget):
     def _urls_have_valid_audio(self, urls):
         for url in urls:
             p = Path(url.toLocalFile())
-            if p.is_file() and p.suffix.lower() in AUDIO_EXTS:
+            if _is_audio_file(p):
                 return True
         return False
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls() and self._urls_have_valid_audio(event.mimeData().urls()):
-            event.setDropAction(Qt.CopyAction)
-            event.accept()
+            event.setDropAction(Qt.CopyAction); event.accept()
         else:
             event.ignore()
 
@@ -120,12 +197,10 @@ class DestDropList(QListWidget):
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
                 p = Path(url.toLocalFile())
-                if p.is_file() and p.suffix.lower() in AUDIO_EXTS:
+                if _is_audio_file(p):
                     self.clear()
                     self.addItem(QListWidgetItem(str(p)))
-                    event.setDropAction(Qt.CopyAction)
-                    event.accept()
-                    return
+                    event.setDropAction(Qt.CopyAction); event.accept(); return
         event.ignore()
 
 class Worker(QThread):
@@ -157,7 +232,7 @@ class MainWin(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Copy Envelope 2")
-        self.setAcceptDrops(True)  # aceptar drops en toda la ventana
+        self.setAcceptDrops(True)  # solo actuará en a_Género (ver dragEnterEvent)
 
         ensure_genre_dirs()
 
@@ -174,17 +249,17 @@ class MainWin(QWidget):
 
         root = QVBoxLayout(self)
 
-        # (Descripción quitada a pedido)
+        # (Descripción quitada)
         copyright = QLabel("© 2025 Gabriel Golker")
         root.addWidget(copyright)
 
         # ---------- Tabs ----------
-        tabs = QTabWidget()
-        root.addWidget(tabs)
+        self.tabs = QTabWidget()
+        root.addWidget(self.tabs)
 
-        # --- Pestaña Principal ---
-        tab_main = QWidget()
-        tab_main_layout = QVBoxLayout(tab_main)
+        # --- Pestaña a_Género ---
+        self.tab_genre = QWidget()
+        tab_genre_layout = QVBoxLayout(self.tab_genre)
 
         g_gen = QGroupBox("Fuente de moldes por género")
         lg = QVBoxLayout(g_gen)
@@ -213,46 +288,53 @@ class MainWin(QWidget):
         self.mold_list = ReadOnlyList()
         lg.addWidget(self.mold_list)
 
-        g_player = QGroupBox("Pre-escucha")
-        lp = QVBoxLayout(g_player)
-        ctl = QHBoxLayout()
+        # Pre-escucha compartida
+        g_player1 = QGroupBox("Pre-escucha")
+        lp1 = QVBoxLayout(g_player1)
+        ctl1 = QHBoxLayout()
         self.btn_play = QPushButton("▶︎")
         self.btn_pause = QPushButton("⏸")
         self.btn_stop = QPushButton("⏹")
-        ctl.addWidget(self.btn_play)
-        ctl.addWidget(self.btn_pause)
-        ctl.addWidget(self.btn_stop)
-        self.chk_autoplay = QCheckBox("Auto reproducir al seleccionar")
-        self.chk_autoplay.setChecked(True)
-        ctl.addWidget(self.chk_autoplay, 1)
-        lp.addLayout(ctl)
-        self.sld_pos = QSlider(Qt.Horizontal)
-        self.sld_pos.setRange(0, 0)
-        lp.addWidget(self.sld_pos)
-        self.lbl_time = QLabel("00:00 / 00:00")
-        lp.addWidget(self.lbl_time)
-        lg.addWidget(g_player)
+        ctl1.addWidget(self.btn_play); ctl1.addWidget(self.btn_pause); ctl1.addWidget(self.btn_stop)
+        self.chk_autoplay = QCheckBox("Auto reproducir al seleccionar"); self.chk_autoplay.setChecked(True)
+        ctl1.addWidget(self.chk_autoplay, 1)
+        lp1.addLayout(ctl1)
+        self.sld_pos = QSlider(Qt.Horizontal); self.sld_pos.setRange(0, 0); lp1.addWidget(self.sld_pos)
+        self.lbl_time = QLabel("00:00 / 00:00"); lp1.addWidget(self.lbl_time)
+        lg.addWidget(g_player1)
+        tab_genre_layout.addWidget(g_gen)
 
-        tab_main_layout.addWidget(g_gen)
+        # --- Pestaña b_Básico ---
+        self.tab_basic = QWidget()
+        tab_basic_layout = QVBoxLayout(self.tab_basic)
 
-        # --- Destino ---
-        g_dest = QGroupBox("Destino (arrastra o elige un archivo)")
-        ld = QVBoxLayout(g_dest)
-        self.dest_list = DestDropList()
-        ld.addWidget(self.dest_list)
-        btn_dest = QPushButton("Elegir destino…")
-        btn_clear_d = QPushButton("Limpiar")
-        bdh = QHBoxLayout()
-        bdh.addWidget(btn_dest)
-        bdh.addWidget(btn_clear_d)
-        ld.addLayout(bdh)
-        tab_main_layout.addWidget(g_dest)
+        g_basic = QGroupBox("Moldes (arrastra archivos o suelta una carpeta)")
+        lb = QVBoxLayout(g_basic)
 
-        tabs.addTab(tab_main, "Principal")
+        bar = QHBoxLayout()
+        self.btn_basic_add_files = QPushButton("Añadir archivos…")
+        self.btn_basic_add_dir = QPushButton("Añadir carpeta…")
+        self.btn_basic_clear = QPushButton("Limpiar")
+        bar.addWidget(self.btn_basic_add_files)
+        bar.addWidget(self.btn_basic_add_dir)
+        bar.addWidget(self.btn_basic_clear)
+        lb.addLayout(bar)
 
-        # --- Pestaña Configuración ---
-        tab_cfg = QWidget()
-        tab_cfg_layout = QVBoxLayout(tab_cfg)
+        self.basic_list = BasicMoldList()
+        lb.addWidget(self.basic_list)
+
+        # Nota de reproducción (usa controles compartidos)
+        g_player2 = QGroupBox("Pre-escucha")
+        lp2 = QVBoxLayout(g_player2)
+        note = QLabel("Usa los controles de reproducción compartidos (arriba).")
+        lp2.addWidget(note)
+        lb.addWidget(g_player2)
+
+        tab_basic_layout.addWidget(g_basic)
+
+        # --- Tab Configuración (global) ---
+        self.tab_cfg = QWidget()
+        tab_cfg_layout = QVBoxLayout(self.tab_cfg)
 
         g_cfg = QGroupBox("Configuración rápida")
         lf = QFormLayout(g_cfg)
@@ -266,10 +348,8 @@ class MainWin(QWidget):
 
         # Campo salida + "…" + Abrir carpeta
         self.ed_out = QLineEdit(str(Path.cwd() / "salida.wav"))
-        self.btn_browse_out = QToolButton()
-        self.btn_browse_out.setText("…")
+        self.btn_browse_out = QToolButton(); self.btn_browse_out.setText("…")
         self.btn_open_out_dir = QPushButton("Abrir carpeta")
-
         out_row = QHBoxLayout()
         out_row.addWidget(self.ed_out, 1)
         out_row.addWidget(self.btn_browse_out)
@@ -289,68 +369,92 @@ class MainWin(QWidget):
         lf.addRow(self.chk_auto_name)
 
         tab_cfg_layout.addWidget(g_cfg)
-        tabs.addTab(tab_cfg, "Configuración")
+
+        # Añadir pestañas
+        self.tabs.addTab(self.tab_genre, "a_Género")
+        self.tabs.addTab(self.tab_basic, "b_Básico")
+        self.tabs.addTab(self.tab_cfg, "Configuración")
+
+        # --- Destino (compartido) ---
+        g_dest = QGroupBox("Destino (arrastra o elige un archivo)")
+        ld = QVBoxLayout(g_dest)
+        self.dest_list = DestDropList()
+        ld.addWidget(self.dest_list)
+        btn_dest = QPushButton("Elegir destino…")
+        btn_clear_d = QPushButton("Limpiar")
+        bdh = QHBoxLayout()
+        bdh.addWidget(btn_dest); bdh.addWidget(btn_clear_d)
+        ld.addLayout(bdh)
+        root.addWidget(g_dest)
 
         # Progreso & Logs
-        self.progress = QProgressBar(); self.progress.setRange(0, 100)
-        root.addWidget(self.progress)
-
-        self.logs = QPlainTextEdit(); self.logs.setReadOnly(True); self.logs.setMaximumBlockCount(5000)
-        root.addWidget(self.logs)
+        self.progress = QProgressBar(); self.progress.setRange(0, 100); root.addWidget(self.progress)
+        self.logs = QPlainTextEdit(); self.logs.setReadOnly(True); self.logs.setMaximumBlockCount(5000); root.addWidget(self.logs)
 
         # Botón procesar
         hb = QHBoxLayout()
-        self.btn_run = QPushButton("Procesar")
-        hb.addWidget(self.btn_run)
+        self.btn_run = QPushButton("Procesar"); hb.addWidget(self.btn_run)
         root.addLayout(hb)
 
-        # Señales
+        # Señales (Género)
         self.cb_genre.currentIndexChanged.connect(self.on_genre_changed)
         self.btn_open_folder.clicked.connect(self.on_open_folder)
         self.btn_pick_random.clicked.connect(self.pick_random_n)
         self.btn_refresh.clicked.connect(self.refresh_current_folder)
+
+        # Señales (Básico)
+        self.btn_basic_add_files.clicked.connect(self.basic_add_files)
+        self.btn_basic_add_dir.clicked.connect(self.basic_add_dir)
+        self.btn_basic_clear.clicked.connect(self.basic_list.clear)
+
+        # Señales (Destino / general)
         btn_dest.clicked.connect(self.pick_dest_file)
         btn_clear_d.clicked.connect(self.dest_list.clear)
         self.btn_run.clicked.connect(self.on_run)
-        # Reproductor
+
+        # Reproductor (compartido)
         self.btn_play.clicked.connect(self.on_play)
         self.btn_pause.clicked.connect(self.on_pause)
         self.btn_stop.clicked.connect(self.on_stop)
         self._connect_player_signals()
-        self.mold_list.currentItemChanged.connect(self.on_mold_item_changed)
+
+        # Selección para pre-escucha
+        self.mold_list.currentItemChanged.connect(lambda curr, prev: self.on_any_mold_item_changed(self.mold_list, curr, prev))
         self.mold_list.itemDoubleClicked.connect(lambda _: self.on_play())
+        self.basic_list.currentItemChanged.connect(lambda curr, prev: self.on_any_mold_item_changed(self.basic_list, curr, prev))
+        self.basic_list.itemDoubleClicked.connect(lambda _: self.on_play())
+
         # Salida
         self.btn_browse_out.clicked.connect(self.browse_out_file)
         self.btn_open_out_dir.clicked.connect(self.open_out_folder)
 
+        # Inicializar
         self.on_genre_changed()
         self.worker = None
 
-    # --- Drag & drop a nivel ventana (por si se suelta fuera de la lista) ---
+    # --- Drag & drop a nivel ventana ---
+    # NOTA: Solo activo para a_Género (en b_Básico se usa drop "por zona")
     def _urls_have_valid_audio(self, urls):
         for url in urls:
             p = Path(url.toLocalFile())
-            if p.is_file() and p.suffix.lower() in AUDIO_EXTS:
+            if _is_audio_file(p):
                 return True
         return False
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls() and self._urls_have_valid_audio(event.mimeData().urls()):
-            event.setDropAction(Qt.CopyAction)
-            event.accept()
+        if self.tabs.currentWidget() is self.tab_genre and event.mimeData().hasUrls() and self._urls_have_valid_audio(event.mimeData().urls()):
+            event.setDropAction(Qt.CopyAction); event.accept()
         else:
             event.ignore()
 
     def dropEvent(self, event):
-        if event.mimeData().hasUrls():
+        if self.tabs.currentWidget() is self.tab_genre and event.mimeData().hasUrls():
             for url in event.mimeData().urls():
                 p = Path(url.toLocalFile())
-                if p.is_file() and p.suffix.lower() in AUDIO_EXTS:
+                if _is_audio_file(p):
                     self.dest_list.clear()
                     self.dest_list.addItem(QListWidgetItem(str(p)))
-                    event.setDropAction(Qt.CopyAction)
-                    event.accept()
-                    return
+                    event.setDropAction(Qt.CopyAction); event.accept(); return
         event.ignore()
 
     # -------- utilidades de UI --------
@@ -364,7 +468,7 @@ class MainWin(QWidget):
         files = []
         if folder.exists():
             for child in sorted(folder.iterdir()):
-                if child.is_file() and child.suffix.lower() in AUDIO_EXTS:
+                if _is_audio_file(child):
                     files.append(child)
         return files
 
@@ -391,47 +495,45 @@ class MainWin(QWidget):
             QMessageBox.warning(self, "Sin samples", "No hay archivos de audio en la carpeta del género seleccionado.")
             return
         n = max(1, int(n))
-        if len(files) <= n:
-            chosen = files
-        else:
-            chosen = random.sample(files, n)
+        chosen = files if len(files) <= n else random.sample(files, n)
         self.mold_list.set_paths(chosen)
 
-    # -------- Reproductor --------
+    # -------- Básico: añadir archivos/carpeta --------
+    def basic_add_files(self):
+        files, _ = QFileDialog.getOpenFileNames(self, "Añadir moldes", str(Path.cwd()),
+                    "Audio (*.wav *.mp3 *.flac *.ogg *.m4a *.aiff *.aif)")
+        if files:
+            self.basic_list.add_files([Path(f) for f in files])
+
+    def basic_add_dir(self):
+        d = QFileDialog.getExistingDirectory(self, "Elegir carpeta de moldes", str(Path.cwd()))
+        if d:
+            paths = _collect_audios_from_dir(Path(d), recursive=True)
+            self.basic_list.add_files(paths)
+
+    # -------- Pre-escucha compartida --------
     def _connect_player_signals(self):
         try:
             self.player.positionChanged.connect(self.on_pos_changed)
             self.player.durationChanged.connect(self.on_dur_changed)
             self.player.mediaStatusChanged.connect(self.on_media_status)
-            try:
-                self.player.errorOccurred.connect(self.on_media_error)
-            except Exception:
-                pass
-            try:
-                self.sld_pos.sliderMoved.disconnect()
-            except Exception:
-                pass
+            try: self.player.errorOccurred.connect(self.on_media_error)
+            except Exception: pass
+            try: self.sld_pos.sliderMoved.disconnect()
+            except Exception: pass
             self.sld_pos.sliderMoved.connect(self.player.setPosition)
         except Exception as e:
             self.append_log(f"[Audio] conectar señales: {e}")
 
     def _recreate_player(self):
-        try:
-            vol = self.audio.volume() if hasattr(self, 'audio') and self.audio else 0.9
-        except Exception:
-            vol = 0.9
-        try:
-            self.player.stop()
-        except Exception:
-            pass
-        try:
-            self.player.deleteLater()
-        except Exception:
-            pass
-        try:
-            self.audio.deleteLater()
-        except Exception:
-            pass
+        try: vol = self.audio.volume() if hasattr(self, 'audio') and self.audio else 0.9
+        except Exception: vol = 0.9
+        try: self.player.stop()
+        except Exception: pass
+        try: self.player.deleteLater()
+        except Exception: pass
+        try: self.audio.deleteLater()
+        except Exception: pass
         self.player = QMediaPlayer(self)
         self.audio = QAudioOutput(self)
         self.audio.setVolume(vol)
@@ -441,15 +543,11 @@ class MainWin(QWidget):
         self._connect_player_signals()
 
     def _fmt_ms(self, ms: int) -> str:
-        ms = int(ms or 0)
-        s = ms // 1000
-        m = s // 60
-        s = s % 60
+        ms = int(ms or 0); s = ms // 1000; m = s // 60; s = s % 60
         return f"{m:02}:{s:02}"
 
     def _load_player_source(self, path: Path):
         try:
-            # recrear completamente el reproductor para evitar estados colgados del backend
             self._recreate_player()
             self.player.setSource(QUrl.fromLocalFile(str(path)))
             self.sld_pos.setRange(0, 0)
@@ -459,8 +557,10 @@ class MainWin(QWidget):
         except Exception as e:
             self.append_log(f"[Audio] No se pudo cargar: {path} -> {e}")
 
-    def on_mold_item_changed(self, curr, prev):
-        if curr:
+    def on_any_mold_item_changed(self, which_list: QListWidget, curr, prev):
+        if curr is None:
+            return
+        if which_list is self.mold_list or which_list is self.basic_list:
             p = Path(curr.text())
             self._autoplay_pending = bool(self.chk_autoplay.isChecked())
             self._load_player_source(p)
@@ -512,20 +612,12 @@ class MainWin(QWidget):
 
     def on_media_error(self, *args):
         try:
-            err_text = None
-            if hasattr(self.player, 'errorString'):
-                err_text = self.player.errorString()
+            err_text = self.player.errorString() if hasattr(self.player, 'errorString') else None
             self.append_log(f"[Audio] error: {args} {('-> ' + err_text) if err_text else ''}")
         except Exception:
             pass
 
-    def pick_random_n(self):
-        try:
-            self.player.stop()
-        except Exception:
-            pass
-        self.refresh_current_folder(pick_random=True)
-
+    # -------- destino --------
     def pick_dest_file(self):
         f, _ = QFileDialog.getOpenFileName(self, "Elegir destino", str(Path.cwd()),
                                           "Audio (*.wav *.mp3 *.flac *.ogg *.m4a *.aiff *.aif)")
@@ -534,10 +626,16 @@ class MainWin(QWidget):
             self.dest_list.addItem(QListWidgetItem(f))
 
     # -------- ejecutar --------
+    def _active_mold_paths(self):
+        current = self.tabs.currentWidget()
+        if current is self.tab_basic:
+            return self.basic_list.paths()
+        return self.mold_list.paths()
+
     def on_run(self):
-        molds = getattr(self.mold_list, "paths", lambda: [])()
+        molds = self._active_mold_paths()
         if not molds:
-            QMessageBox.warning(self, "Faltan moldes", "No hay moldes seleccionados (revisa la carpeta del género).")
+            QMessageBox.warning(self, "Faltan moldes", "No hay moldes seleccionados.")
             return
         dests = [self.dest_list.item(i).text() for i in range(self.dest_list.count())]
         if not dests:
@@ -552,8 +650,7 @@ class MainWin(QWidget):
             dest_base = _slug(Path(dest).stem, 20)
             mold_names = [(_slug(Path(p).stem, 12)[:4] or 'xxxx') for p in molds]
             mold_part = "+".join(mold_names)
-            if len(mold_part) > 40:
-                mold_part = mold_part[:40]
+            if len(mold_part) > 40: mold_part = mold_part[:40]
             out = str(out_dir / f"{dest_base}__{mold_part}{ext}")
         elif not out:
             QMessageBox.warning(self, "Falta salida", "Especifica el archivo de salida (ej: salida.wav).")
@@ -579,8 +676,7 @@ class MainWin(QWidget):
             "match_lufs": False,
         }
 
-        self.progress.setValue(0)
-        self.logs.clear()
+        self.progress.setValue(0); self.logs.clear()
 
         self.worker = Worker(dest, molds, out, cfg)
         self.worker.progressed.connect(self.progress.setValue)
@@ -606,23 +702,18 @@ class MainWin(QWidget):
     def open_out_folder(self):
         path_txt = self.ed_out.text().strip()
         if not path_txt:
-            QMessageBox.warning(self, "Ruta vacía", "Primero especifica el archivo de salida.")
-            return
+            QMessageBox.warning(self, "Ruta vacía", "Primero especifica el archivo de salida."); return
         p = Path(path_txt)
         folder = p if p.is_dir() else p.parent
-        try:
-            folder.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
+        try: folder.mkdir(parents=True, exist_ok=True)
+        except Exception: pass
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder.resolve())))
 
     def browse_out_file(self):
         start_path = self.ed_out.text().strip()
         start_dir = str(Path(start_path).parent) if start_path else str(Path.cwd())
         fname, _ = QFileDialog.getSaveFileName(
-            self,
-            "Elegir archivo de salida",
-            start_dir,
+            self, "Elegir archivo de salida", start_dir,
             "Audio (*.wav *.mp3 *.flac *.ogg *.m4a *.aiff *.aif);;Todos los archivos (*.*)"
         )
         if fname:
@@ -634,7 +725,7 @@ def main():
     if _HAS_QDARK:
         app.setStyleSheet(qdarkstyle.load_stylesheet_pyside6())
     win = MainWin()
-    win.resize(900, 780)
+    win.resize(980, 820)
     win.show()
     sys.exit(app.exec())
 
