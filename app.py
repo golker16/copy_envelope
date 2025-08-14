@@ -5,28 +5,28 @@ import re
 from pathlib import Path
 import traceback
 
-from PySide6.QtCore import Qt, QThread, Signal, QUrl, QTimer, QSettings
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import Qt, QThread, Signal, QUrl, QTimer, QSettings, QSize
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFileDialog, QListWidget, QListWidgetItem, QPlainTextEdit, QProgressBar,
     QGroupBox, QLineEdit, QFormLayout, QMessageBox, QComboBox, QSpinBox, QCheckBox, QSlider,
-    QTabWidget, QToolButton, QAbstractItemView, QDialog, QSplitter, QDialogButtonBox
+    QTabWidget, QToolButton, QAbstractItemView, QDialog, QDialogButtonBox
 )
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
-# =================== PALETA DE COLORES (edítame) ===================
+# =================== PALETA DE COLORES ===================
 THEME = {
-    "bg": "#0f172a",          # fondo general
-    "panel": "#111827",       # fondos de listas/campos
-    "group": "#1f2937",       # títulos de groupbox / tabs activos
+    "bg": "#000000",          # fondo general
+    "panel": "#121212",       # fondos de listas/campos
+    "group": "#3a373b",       # títulos de groupbox / tabs activos
     "text": "#e5e7eb",        # texto normal
-    "muted": "#9ca3af",       # texto secundario
-    "border": "#374151",      # bordes
-    "button": "#334155",      # fondo de botones
+    "muted": "#b0b0b0",       # texto secundario
+    "border": "#4c494e",      # bordes
+    "button": "#3a373b",      # fondo de botones
     "button_text": "#e5e7eb", # texto de botones
-    "accent": "#3b82f6",      # hover/acentos
+    "accent": "#895ba9",      # hover / progreso
 }
 def apply_theme():
     c = THEME
@@ -34,16 +34,17 @@ def apply_theme():
     QWidget {{
         background-color: {c['bg']};
         color: {c['text']};
+        font-size: 12px;
     }}
     QGroupBox {{
         border: 1px solid {c['border']};
         border-radius: 6px;
-        margin-top: 10px;
+        margin-top: 8px;
     }}
     QGroupBox::title {{
         subcontrol-origin: margin;
         subcontrol-position: top left;
-        padding: 4px 8px;
+        padding: 2px 8px;
         background-color: {c['group']};
         color: {c['text']};
         border-radius: 4px;
@@ -72,17 +73,10 @@ def apply_theme():
     QProgressBar {{
         border: 1px solid {c['border']}; border-radius: 6px; text-align: center;
         background: {c['panel']};
+        height: 12px;
     }}
     QProgressBar::chunk {{ background: {c['accent']}; border-radius: 6px; }}
     """
-
-# =================== QDarkStyle (opcional) ===================
-_HAS_QDARK = False
-try:
-    import qdarkstyle
-    _HAS_QDARK = True
-except Exception:
-    _HAS_QDARK = False
 
 # =================== Engine ===================
 try:
@@ -166,7 +160,7 @@ def _collect_audios_from_dir(folder: Path, recursive: bool = True):
 # ---------------- Widgets ----------------
 class ReadOnlyList(QListWidget):
     """
-    Lista para 'a_Género': muestra solo el nombre SIN extensión,
+    Lista para 'Género': muestra solo el nombre SIN extensión,
     pero guarda la ruta completa en UserRole.
     """
     def __init__(self):
@@ -191,7 +185,7 @@ class ReadOnlyList(QListWidget):
         return out
 
 class BasicMoldList(QListWidget):
-    """Lista para moldes ad-hoc (b_Básico): muestra rutas completas, acepta archivos y carpetas."""
+    """Lista para moldes ad-hoc (Básico): rutas completas, acepta archivos y carpetas."""
     def __init__(self):
         super().__init__()
         self.setAcceptDrops(True)
@@ -249,7 +243,7 @@ class DestDropList(QListWidget):
     def __init__(self):
         super().__init__()
         self.setAcceptDrops(True)
-        self.setMinimumHeight(120)
+        self.setMinimumHeight(100)
         self.setAlternatingRowColors(True)
         self.setSelectionMode(QAbstractItemView.SingleSelection)
         self.setDragEnabled(False)
@@ -421,10 +415,12 @@ class ConfigDialog(QDialog):
 
 # ---------------- Ventana principal ----------------
 class MainWin(QWidget):
+    LOGO_MAX_H = 90  # altura de la franja del logo
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Copy Envelope 2")
-        self.setAcceptDrops(True)  # solo actuará en a_Género (ver dragEnterEvent)
+        self.setAcceptDrops(True)  # solo actuará en 'Género' (ver dragEnterEvent)
 
         ensure_genre_dirs()
 
@@ -439,30 +435,41 @@ class MainWin(QWidget):
         self._duration = 0
         self._autoplay_pending = False
 
-        icon_path = Path("assets/app.png")
-        if icon_path.exists():
-            self.setWindowIcon(QIcon(str(icon_path)))
+        # Icono de ventana: app.ico -> app.png (fallback)
+        ico_ico = Path("assets/app.ico")
+        ico_png = Path("assets/app.png")
+        if ico_ico.exists():
+            self.setWindowIcon(QIcon(str(ico_ico)))
+        elif ico_png.exists():
+            self.setWindowIcon(QIcon(str(ico_png)))
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(10, 8, 10, 8)
+        root.setSpacing(6)
 
-        # Barra superior con botón de Configuración
-        topbar = QHBoxLayout()
-        topbar.addStretch(1)
+        # ---------------- Header: Logo centrado + botón Config ----------------
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
         self.btn_config = QPushButton("⚙ Configuración")
-        topbar.addWidget(self.btn_config)
-        root.addLayout(topbar)
+        self.btn_config.setFixedHeight(28)
 
-        # ---------- Splitter 50/50 ----------
-        splitter = QSplitter(Qt.Horizontal)
-        root.addWidget(splitter, 1)
+        self.logo_lbl = QLabel("")
+        self.logo_lbl.setMinimumHeight(self.LOGO_MAX_H)
+        self.logo_lbl.setMaximumHeight(self.LOGO_MAX_H)
+        self.logo_lbl.setAlignment(Qt.AlignCenter)
+        self._load_logo()
 
-        # ----- IZQ: Tabs de moldes -----
-        left = QWidget(); left_v = QVBoxLayout(left); left_v.setContentsMargins(0,0,0,0)
+        header.addStretch(1)
+        header.addWidget(self.logo_lbl, 10, alignment=Qt.AlignCenter)
+        header.addStretch(1)
+        header.addWidget(self.btn_config, 0, alignment=Qt.AlignRight)
+        root.addLayout(header)
+
+        # ---------------- Tabs (Género / Básico) ----------------
         self.tabs = QTabWidget()
-        left_v.addWidget(self.tabs)
-        splitter.addWidget(left)
+        root.addWidget(self.tabs)
 
-        # a_Género
+        # --- Tab: Género ---
         self.tab_genre = QWidget()
         tab_genre_layout = QVBoxLayout(self.tab_genre)
 
@@ -473,25 +480,23 @@ class MainWin(QWidget):
         row.addWidget(QLabel("Género:"))
         self.cb_genre = QComboBox(); self.cb_genre.addItems(GENRES)
         row.addWidget(self.cb_genre, 1)
-
         row.addWidget(QLabel("Cantidad:"))
         self.spn_count = QSpinBox(); self.spn_count.setRange(1, 50); self.spn_count.setValue(3)
         row.addWidget(self.spn_count)
-
         self.btn_open_folder = QPushButton("Abrir carpeta…")
         self.btn_pick_random = QPushButton("Elegir N al azar")
         self.btn_refresh = QPushButton("Refrescar")
         row.addWidget(self.btn_open_folder); row.addWidget(self.btn_pick_random); row.addWidget(self.btn_refresh)
-
         lg.addLayout(row)
 
         self.mold_list = ReadOnlyList()
         lg.addWidget(self.mold_list)
         tab_genre_layout.addWidget(g_gen)
 
-        # b_Básico
+        # --- Tab: Básico ---
         self.tab_basic = QWidget()
         tab_basic_layout = QVBoxLayout(self.tab_basic)
+
         g_basic = QGroupBox("Moldes (arrastra archivos o suelta una carpeta)")
         lb = QVBoxLayout(g_basic)
 
@@ -499,7 +504,9 @@ class MainWin(QWidget):
         self.btn_basic_add_files = QPushButton("Añadir archivos…")
         self.btn_basic_add_dir = QPushButton("Añadir carpeta…")
         self.btn_basic_clear = QPushButton("Limpiar")
-        bar.addWidget(self.btn_basic_add_files); bar.addWidget(self.btn_basic_add_dir); bar.addWidget(self.btn_basic_clear)
+        bar.addWidget(self.btn_basic_add_files)
+        bar.addWidget(self.btn_basic_add_dir)
+        bar.addWidget(self.btn_basic_clear)
         lb.addLayout(bar)
 
         self.basic_list = BasicMoldList()
@@ -507,30 +514,28 @@ class MainWin(QWidget):
 
         tab_basic_layout.addWidget(g_basic)
 
-        self.tabs.addTab(self.tab_genre, "a_Género")
-        self.tabs.addTab(self.tab_basic, "b_Básico")
+        # Añadir tabs con nombres sin prefijos
+        self.tabs.addTab(self.tab_genre, "Género")
+        self.tabs.addTab(self.tab_basic, "Básico")
 
-        # ----- DER: Destino -----
-        right = QWidget(); right_v = QVBoxLayout(right); right_v.setContentsMargins(0,0,0,0)
+        # --- Destino (compacto) ---
         g_dest = QGroupBox("Destino (arrastra o elige un archivo)")
         ld = QVBoxLayout(g_dest)
         self.dest_list = DestDropList()
+        self.dest_list.setMinimumHeight(90)
         ld.addWidget(self.dest_list)
         btn_dest = QPushButton("Elegir destino…")
         btn_clear_d = QPushButton("Limpiar")
         bdh = QHBoxLayout(); bdh.addWidget(btn_dest); bdh.addWidget(btn_clear_d)
         ld.addLayout(bdh)
-        right_v.addWidget(g_dest)
-        splitter.addWidget(right)
+        root.addWidget(g_dest)
 
-        # tamaños iniciales 50/50
-        splitter.setSizes([1, 1])
-
-        # --- Pre-escucha (compartida, abajo del splitter) ---
+        # --- Pre-escucha (compacta) ---
         g_player = QGroupBox("Pre-escucha")
         lp = QVBoxLayout(g_player)
         ctl = QHBoxLayout()
         self.btn_play = QPushButton("▶︎"); self.btn_pause = QPushButton("⏸"); self.btn_stop = QPushButton("⏹")
+        self.btn_play.setFixedWidth(36); self.btn_pause.setFixedWidth(36); self.btn_stop.setFixedWidth(36)
         ctl.addWidget(self.btn_play); ctl.addWidget(self.btn_pause); ctl.addWidget(self.btn_stop)
         self.chk_autoplay = QCheckBox("Auto reproducir al seleccionar"); self.chk_autoplay.setChecked(True)
         ctl.addWidget(self.chk_autoplay, 1)
@@ -539,9 +544,11 @@ class MainWin(QWidget):
         self.lbl_time = QLabel("00:00 / 00:00"); lp.addWidget(self.lbl_time)
         root.addWidget(g_player)
 
-        # Progreso & Logs
+        # Progreso & Logs (compactos)
         self.progress = QProgressBar(); self.progress.setRange(0, 100); root.addWidget(self.progress)
-        self.logs = QPlainTextEdit(); self.logs.setReadOnly(True); self.logs.setMaximumBlockCount(5000); root.addWidget(self.logs)
+        self.logs = QPlainTextEdit(); self.logs.setReadOnly(True); self.logs.setMaximumBlockCount(4000)
+        self.logs.setFixedHeight(120)  # ocupa menos espacio al abrir
+        root.addWidget(self.logs)
 
         # Botón procesar
         hb = QHBoxLayout()
@@ -588,6 +595,29 @@ class MainWin(QWidget):
         self.on_genre_changed()
         self.worker = None
 
+    # ---------- Logo ----------
+    def _load_logo(self):
+        """Carga únicamente assets/logo.png y lo escala por altura."""
+        self._logo_path = Path("assets/logo.png")
+        if self._logo_path.exists():
+            pix = QPixmap(str(self._logo_path))
+            if not pix.isNull():
+                scaled = pix.scaledToHeight(self.LOGO_MAX_H, Qt.SmoothTransformation)
+                self.logo_lbl.setPixmap(scaled)
+                return
+        # fallback mínimo si no hay logo
+        self.logo_lbl.setText("COPY ENVELOPE")
+        self.logo_lbl.setStyleSheet("font-size: 22px; font-weight: bold;")
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        # reescala el logo a la nueva altura (por si cambian DPI)
+        if hasattr(self, "_logo_path") and self._logo_path.exists():
+            pix = QPixmap(str(self._logo_path))
+            if not pix.isNull():
+                scaled = pix.scaledToHeight(self.LOGO_MAX_H, Qt.SmoothTransformation)
+                self.logo_lbl.setPixmap(scaled)
+
     # ---------- Settings ----------
     def _load_settings(self):
         s = QSettings("CopyEnvelope", "CopyEnvelope2")
@@ -615,7 +645,7 @@ class MainWin(QWidget):
             self._save_settings()
 
     # --- Drag & drop a nivel ventana ---
-    # Activo solo para a_Género (en b_Básico se usa drop por zonas)
+    # Activo solo para 'Género' (en 'Básico' se usa drop por zonas)
     def _urls_have_valid_audio(self, urls):
         for url in urls:
             p = Path(url.toLocalFile())
@@ -894,13 +924,9 @@ class MainWin(QWidget):
 # ---------------- main ----------------
 def main():
     app = QApplication(sys.argv)
-    css = apply_theme()
-    if _HAS_QDARK:
-        app.setStyleSheet(qdarkstyle.load_stylesheet_pyside6() + css)
-    else:
-        app.setStyleSheet(css)
+    app.setStyleSheet(apply_theme())  # usamos SOLO nuestra paleta
     win = MainWin()
-    win.resize(1100, 820)
+    win.resize(900, 620)  # compacto al abrir
     win.show()
     sys.exit(app.exec())
 
