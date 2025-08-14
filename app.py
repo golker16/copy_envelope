@@ -241,7 +241,7 @@ class Worker(QThread):
 class MainWin(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Copy Envelope 2")
+        self.setWindowTitle("Copy Envelope")
         self.setAcceptDrops(True)  # solo actuará en a_Género (ver dragEnterEvent)
 
         ensure_genre_dirs()
@@ -267,7 +267,7 @@ class MainWin(QWidget):
         self.tab_genre = QWidget()
         tab_genre_layout = QVBoxLayout(self.tab_genre)
 
-        g_gen = QGroupBox("Fuente de moldes por género")
+        g_gen = QGroupBox("Molde(s)")
         lg = QVBoxLayout(g_gen)
 
         row = QHBoxLayout()
@@ -283,7 +283,7 @@ class MainWin(QWidget):
         row.addWidget(self.spn_count)
 
         self.btn_open_folder = QPushButton("Abrir carpeta…")
-        self.btn_pick_random = QPushButton("Elegir N al azar")
+        self.btn_pick_random = QPushButton("Elegir al azar")
         self.btn_refresh = QPushButton("Refrescar")
         row.addWidget(self.btn_open_folder)
         row.addWidget(self.btn_pick_random)
@@ -299,7 +299,7 @@ class MainWin(QWidget):
         self.tab_basic = QWidget()
         tab_basic_layout = QVBoxLayout(self.tab_basic)
 
-        g_basic = QGroupBox("Moldes (arrastra archivos o suelta una carpeta)")
+        g_basic = QGroupBox("Molde(s)")
         lb = QVBoxLayout(g_basic)
 
         bar = QHBoxLayout()
@@ -320,7 +320,7 @@ class MainWin(QWidget):
         self.tab_cfg = QWidget()
         tab_cfg_layout = QVBoxLayout(self.tab_cfg)
 
-        g_cfg = QGroupBox("Configuración rápida")
+        g_cfg = QGroupBox("Configuración")
         lf = QFormLayout(g_cfg)
         self.ed_bpm = QLineEdit("100")
         self.ed_attack = QLineEdit("1.0")
@@ -355,8 +355,8 @@ class MainWin(QWidget):
         tab_cfg_layout.addWidget(g_cfg)
 
         # Añadir pestañas
-        self.tabs.addTab(self.tab_genre, "a_Género")
-        self.tabs.addTab(self.tab_basic, "b_Básico")
+        self.tabs.addTab(self.tab_genre, "a Género")
+        self.tabs.addTab(self.tab_basic, "b Básico")
         self.tabs.addTab(self.tab_cfg, "Configuración")
 
         # --- Pre-escucha (compartida, fuera de las pestañas) ---
@@ -379,7 +379,7 @@ class MainWin(QWidget):
         ld = QVBoxLayout(g_dest)
         self.dest_list = DestDropList()
         ld.addWidget(self.dest_list)
-        btn_dest = QPushButton("Elegir destino…")
+        btn_dest = QPushButton("Elegir archivo…")
         btn_clear_d = QPushButton("Limpiar")
         bdh = QHBoxLayout()
         bdh.addWidget(btn_dest); bdh.addWidget(btn_clear_d)
