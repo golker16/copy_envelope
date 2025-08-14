@@ -10,7 +10,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFileDialog, QListWidget, QListWidgetItem, QPlainTextEdit, QProgressBar,
-    QGroupBox, QLineEdit, QFormLayout, QMessageBox, QComboBox, QSpinBox, QCheckBox, QSlider
+    QGroupBox, QLineEdit, QFormLayout, QMessageBox, QComboBox, QSpinBox, QCheckBox, QSlider, QTabWidget
 )
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
@@ -75,7 +75,7 @@ def _slug(s: str, max_len: int = 30) -> str:
     return s[:max_len].strip('-_')
 
 # ---------------- Widgets ----------------
-class ReadOnlyList(QListWidget):
+class ReadOnlyList(LISTWIDGET := QListWidget):
     """Solo muestra rutas; sin drag&drop del usuario."""
     def __init__(self):
         super().__init__()
@@ -139,20 +139,18 @@ class MainWin(QWidget):
 
         root = QVBoxLayout(self)
 
-        # Descripción
-        desc = QLabel(
-            """
-            <b>Descripción</b><br>
-            Selecciona un <i>género</i>. El programa elegirá por defecto 3 samples al azar de la carpeta del género
-            (puedes abrir esa carpeta y añadir/quitar archivos cuando quieras). Luego aplica la envolvente combinada
-            al archivo de <i>destino</i>.
-            """.strip()
-        )
-        desc.setWordWrap(True)
-        root.addWidget(desc)
+        # (Descripción quitada a pedido)
 
         copyright = QLabel("© 2025 Gabriel Golker")
         root.addWidget(copyright)
+
+        # ---------- Tabs ----------
+        tabs = QTabWidget()
+        root.addWidget(tabs)
+
+        # --- Pestaña Principal: Géneros + Pre-escucha + Destino ---
+        tab_main = QWidget()
+        tab_main_layout = QVBoxLayout(tab_main)
 
         # --- Fuente de moldes: Género + control de carpeta ---
         g_gen = QGroupBox("Fuente de moldes por género")
@@ -203,7 +201,7 @@ class MainWin(QWidget):
         lp.addWidget(self.lbl_time)
         lg.addWidget(g_player)
 
-        root.addWidget(g_gen)
+        tab_main_layout.addWidget(g_gen)
 
         # --- Destino ---
         g_dest = QGroupBox("Destino (arrastra o elige un archivo)")
@@ -218,9 +216,14 @@ class MainWin(QWidget):
         bdh.addWidget(btn_dest)
         bdh.addWidget(btn_clear_d)
         ld.addLayout(bdh)
-        root.addWidget(g_dest)
+        tab_main_layout.addWidget(g_dest)
 
-        # --- Config rápida (mismo comportamiento que antes) ---
+        tabs.addTab(tab_main, "Principal")
+
+        # --- Pestaña Configuración (lo que antes estaba en el root) ---
+        tab_cfg = QWidget()
+        tab_cfg_layout = QVBoxLayout(tab_cfg)
+
         g_cfg = QGroupBox("Configuración rápida")
         lf = QFormLayout(g_cfg)
         self.ed_bpm = QLineEdit("100")
@@ -242,9 +245,11 @@ class MainWin(QWidget):
         self.chk_auto_name = QCheckBox("Auto-nombrar salida (destino + moldes)")
         self.chk_auto_name.setChecked(True)
         lf.addRow(self.chk_auto_name)
-        root.addWidget(g_cfg)
 
-        # Progreso & Logs
+        tab_cfg_layout.addWidget(g_cfg)
+        tabs.addTab(tab_cfg, "Configuración")
+
+        # Progreso & Logs (siempre visibles)
         self.progress = QProgressBar(); self.progress.setRange(0, 100)
         root.addWidget(self.progress)
 
@@ -364,6 +369,7 @@ class MainWin(QWidget):
         self._duration = 0
         self._autoplay_pending = False
         self._connect_player_signals()
+
     def _fmt_ms(self, ms: int) -> str:
         ms = int(ms or 0)
         s = ms // 1000
@@ -539,4 +545,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
