@@ -10,7 +10,8 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFileDialog, QListWidget, QListWidgetItem, QPlainTextEdit, QProgressBar,
-    QGroupBox, QLineEdit, QFormLayout, QMessageBox, QComboBox, QSpinBox, QCheckBox, QSlider, QTabWidget, QToolButton
+    QGroupBox, QLineEdit, QFormLayout, QMessageBox, QComboBox, QSpinBox, QCheckBox, QSlider,
+    QTabWidget, QToolButton, QAbstractItemView
 )
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
@@ -90,6 +91,41 @@ class ReadOnlyList(QListWidget):
 
     def paths(self):
         return [self.item(i).text() for i in range(self.count())]
+
+class DestDropList(QListWidget):
+    """Lista que acepta arrastrar y soltar archivos de audio como 'destino'."""
+    def __init__(self):
+        super().__init__()
+        self.setAcceptDrops(True)
+        self.setMinimumHeight(60)
+        self.setAlternatingRowColors(True)
+        # Desactivar drags internos; solo aceptar drops del SO
+        self.setDragEnabled(False)
+        self.setDragDropMode(QAbstractItemView.NoDragDrop)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                p = Path(url.toLocalFile())
+                if p.is_file() and p.suffix.lower() in AUDIO_EXTS:
+                    event.acceptProposedAction()
+                    return
+        event.ignore()
+
+    def dragMoveEvent(self, event):
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls():
+            # Tomamos el primer archivo de audio válido
+            for url in event.mimeData().urls():
+                p = Path(url.toLocalFile())
+                if p.is_file() and p.suffix.lower() in AUDIO_EXTS:
+                    self.clear()
+                    self.addItem(QListWidgetItem(str(p)))
+                    event.acceptProposedAction()
+                    return
+        event.ignore()
 
 class Worker(QThread):
     progressed = Signal(int)
@@ -206,9 +242,7 @@ class MainWin(QWidget):
         # --- Destino ---
         g_dest = QGroupBox("Destino (arrastra o elige un archivo)")
         ld = QVBoxLayout(g_dest)
-        self.dest_list = QListWidget()
-        self.dest_list.setAcceptDrops(True)
-        self.dest_list.setMinimumHeight(60)
+        self.dest_list = DestDropList()
         ld.addWidget(self.dest_list)
         btn_dest = QPushButton("Elegir destino…")
         btn_clear_d = QPushButton("Limpiar")
@@ -484,13 +518,14 @@ class MainWin(QWidget):
 
     # -------- ejecutar --------
     def on_run(self):
-        molds = self.mold_list.paths()
+        molds = getattr(self.mold_list, "paths", lambda: [])()
+        # mold_list es ReadOnlyList (tiene .paths)
         if not molds:
             QMessageBox.warning(self, "Faltan moldes", "No hay moldes seleccionados (revisa la carpeta del género).")
             return
         dests = [self.dest_list.item(i).text() for i in range(self.dest_list.count())]
         if not dests:
-            QMessageBox.warning(self, "Falta destino", "Elige el archivo destino.")
+            QMessageBox.warning(self, "Falta destino", "Elige o arrastra el archivo destino.")
             return
         dest = dests[0]
         out = self.ed_out.text().strip()
@@ -543,6 +578,12 @@ class MainWin(QWidget):
     def on_done(self, out_path):
         self.append_log(f"OK: {out_path}")
         QMessageBox.information(self, "Listo", f"Se generó: {out_path}")
+        # Abrir automáticamente la carpeta donde se guardó
+        try:
+            folder = Path(out_path).parent
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder.resolve())))
+        except Exception:
+            pass
 
     def on_fail(self, tb):
         self.append_log(tb)
@@ -587,6 +628,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
