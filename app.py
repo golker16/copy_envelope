@@ -27,7 +27,7 @@ except Exception:
 # Import processing engine
 try:
     from engine import apply_envelopes
-except Exception as e:
+except Exception:
     def apply_envelopes(dest_path, mold_paths, out_path, cfg, progress_cb, log_cb):
         log_cb("[WARN] engine.apply_envelopes no encontrado, se copia el destino como salida dummy.")
         import shutil, time
@@ -95,7 +95,10 @@ def _collect_audios_from_dir(folder: Path, recursive: bool = True):
 
 # ---------------- Widgets ----------------
 class ReadOnlyList(QListWidget):
-    """Solo muestra rutas (moldes por género)."""
+    """
+    Lista para 'a_Género': muestra solo el nombre SIN extensión,
+    pero guarda la ruta completa en UserRole.
+    """
     def __init__(self):
         super().__init__()
         self.setAcceptDrops(False)
@@ -105,13 +108,20 @@ class ReadOnlyList(QListWidget):
     def set_paths(self, paths):
         self.clear()
         for p in paths:
-            self.addItem(QListWidgetItem(str(p)))
+            pp = Path(p)
+            it = QListWidgetItem(pp.stem)          # texto visible: sin extensión
+            it.setData(Qt.UserRole, str(pp))       # ruta completa
+            self.addItem(it)
 
     def paths(self):
-        return [self.item(i).text() for i in range(self.count())]
+        out = []
+        for i in range(self.count()):
+            it = self.item(i)
+            out.append(it.data(Qt.UserRole) or it.text())
+        return out
 
 class BasicMoldList(QListWidget):
-    """Lista para moldes ad-hoc: acepta archivos y carpetas (recursivo)."""
+    """Lista para moldes ad-hoc (b_Básico): muestra rutas completas, acepta archivos y carpetas."""
     def __init__(self):
         super().__init__()
         self.setAcceptDrops(True)
@@ -223,7 +233,7 @@ class Worker(QThread):
             _l("Iniciando procesamiento…")
             apply_envelopes(self.dest_path, self.mold_paths, self.out_path, self.cfg, _p, _l)
             self.finished_ok.emit(self.out_path)
-        except Exception as e:
+        except Exception:
             tb = traceback.format_exc()
             self.failed.emit(tb)
 
@@ -248,10 +258,6 @@ class MainWin(QWidget):
             self.setWindowIcon(QIcon(str(icon_path)))
 
         root = QVBoxLayout(self)
-
-        # (Descripción quitada)
-        copyright = QLabel("© 2025 Gabriel Golker")
-        root.addWidget(copyright)
 
         # ---------- Tabs ----------
         self.tabs = QTabWidget()
@@ -287,21 +293,6 @@ class MainWin(QWidget):
 
         self.mold_list = ReadOnlyList()
         lg.addWidget(self.mold_list)
-
-        # Pre-escucha compartida
-        g_player1 = QGroupBox("Pre-escucha")
-        lp1 = QVBoxLayout(g_player1)
-        ctl1 = QHBoxLayout()
-        self.btn_play = QPushButton("▶︎")
-        self.btn_pause = QPushButton("⏸")
-        self.btn_stop = QPushButton("⏹")
-        ctl1.addWidget(self.btn_play); ctl1.addWidget(self.btn_pause); ctl1.addWidget(self.btn_stop)
-        self.chk_autoplay = QCheckBox("Auto reproducir al seleccionar"); self.chk_autoplay.setChecked(True)
-        ctl1.addWidget(self.chk_autoplay, 1)
-        lp1.addLayout(ctl1)
-        self.sld_pos = QSlider(Qt.Horizontal); self.sld_pos.setRange(0, 0); lp1.addWidget(self.sld_pos)
-        self.lbl_time = QLabel("00:00 / 00:00"); lp1.addWidget(self.lbl_time)
-        lg.addWidget(g_player1)
         tab_genre_layout.addWidget(g_gen)
 
         # --- Pestaña b_Básico ---
@@ -322,13 +313,6 @@ class MainWin(QWidget):
 
         self.basic_list = BasicMoldList()
         lb.addWidget(self.basic_list)
-
-        # Nota de reproducción (usa controles compartidos)
-        g_player2 = QGroupBox("Pre-escucha")
-        lp2 = QVBoxLayout(g_player2)
-        note = QLabel("Usa los controles de reproducción compartidos (arriba).")
-        lp2.addWidget(note)
-        lb.addWidget(g_player2)
 
         tab_basic_layout.addWidget(g_basic)
 
@@ -375,6 +359,21 @@ class MainWin(QWidget):
         self.tabs.addTab(self.tab_basic, "b_Básico")
         self.tabs.addTab(self.tab_cfg, "Configuración")
 
+        # --- Pre-escucha (compartida, fuera de las pestañas) ---
+        g_player = QGroupBox("Pre-escucha")
+        lp = QVBoxLayout(g_player)
+        ctl = QHBoxLayout()
+        self.btn_play = QPushButton("▶︎")
+        self.btn_pause = QPushButton("⏸")
+        self.btn_stop = QPushButton("⏹")
+        ctl.addWidget(self.btn_play); ctl.addWidget(self.btn_pause); ctl.addWidget(self.btn_stop)
+        self.chk_autoplay = QCheckBox("Auto reproducir al seleccionar"); self.chk_autoplay.setChecked(True)
+        ctl.addWidget(self.chk_autoplay, 1)
+        lp.addLayout(ctl)
+        self.sld_pos = QSlider(Qt.Horizontal); self.sld_pos.setRange(0, 0); lp.addWidget(self.sld_pos)
+        self.lbl_time = QLabel("00:00 / 00:00"); lp.addWidget(self.lbl_time)
+        root.addWidget(g_player)
+
         # --- Destino (compartido) ---
         g_dest = QGroupBox("Destino (arrastra o elige un archivo)")
         ld = QVBoxLayout(g_dest)
@@ -396,10 +395,15 @@ class MainWin(QWidget):
         self.btn_run = QPushButton("Procesar"); hb.addWidget(self.btn_run)
         root.addLayout(hb)
 
+        # Copyright centrado abajo
+        self.copyright = QLabel("© 2025 Gabriel Golker")
+        self.copyright.setAlignment(Qt.AlignCenter)
+        root.addWidget(self.copyright, alignment=Qt.AlignCenter)
+
         # Señales (Género)
         self.cb_genre.currentIndexChanged.connect(self.on_genre_changed)
         self.btn_open_folder.clicked.connect(self.on_open_folder)
-        self.btn_pick_random.clicked.connect(self.pick_random_n)  # <-- ahora existe
+        self.btn_pick_random.clicked.connect(self.pick_random_n)
         self.btn_refresh.clicked.connect(self.refresh_current_folder)
 
         # Señales (Básico)
@@ -433,7 +437,7 @@ class MainWin(QWidget):
         self.worker = None
 
     # --- Drag & drop a nivel ventana ---
-    # NOTA: Solo activo para a_Género (en b_Básico se usa drop "por zona")
+    # Activo solo para a_Género (en b_Básico se usa drop por zonas)
     def _urls_have_valid_audio(self, urls):
         for url in urls:
             p = Path(url.toLocalFile())
@@ -498,7 +502,7 @@ class MainWin(QWidget):
         chosen = files if len(files) <= n else random.sample(files, n)
         self.mold_list.set_paths(chosen)
 
-    # ---- FALTABA: botón Elegir N al azar ----
+    # ---- botón Elegir N al azar ----
     def pick_random_n(self):
         try:
             self.player.stop()
@@ -568,10 +572,12 @@ class MainWin(QWidget):
     def on_any_mold_item_changed(self, which_list: QListWidget, curr, prev):
         if curr is None:
             return
-        if which_list is self.mold_list or which_list is self.basic_list:
+        if which_list is self.mold_list:
+            p = Path(curr.data(Qt.UserRole) or curr.text())
+        else:
             p = Path(curr.text())
-            self._autoplay_pending = bool(self.chk_autoplay.isChecked())
-            self._load_player_source(p)
+        self._autoplay_pending = bool(self.chk_autoplay.isChecked())
+        self._load_player_source(p)
 
     def on_play(self):
         try:
@@ -670,7 +676,7 @@ class MainWin(QWidget):
             try:
                 weights = [float(x) for x in wtxt.split(",")]
             except Exception:
-                QMessageBox.warning(self, "Weights inválidos", "Usa números separados por coma, ej: 1,0.8,1,2")
+                QMessageBox.warning(self, "Weights inválidos", "Usa números separados por coma, ej: 1,0.8,1.2")
                 return
 
         cfg = {
@@ -733,7 +739,7 @@ def main():
     if _HAS_QDARK:
         app.setStyleSheet(qdarkstyle.load_stylesheet_pyside6())
     win = MainWin()
-    win.resize(980, 820)
+    win.resize(980, 840)
     win.show()
     sys.exit(app.exec())
 
