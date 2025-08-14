@@ -375,7 +375,7 @@ class MainWin(QWidget):
         root.addWidget(g_player)
 
         # --- Destino (compartido) ---
-        g_dest = QGroupBox("Destino (arrastra o elige un archivo)")
+        g_dest = QGroupBox("Destino")
         ld = QVBoxLayout(g_dest)
         self.dest_list = DestDropList()
         ld.addWidget(self.dest_list)
