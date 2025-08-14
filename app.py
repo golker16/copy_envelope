@@ -10,7 +10,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFileDialog, QListWidget, QListWidgetItem, QPlainTextEdit, QProgressBar,
-    QGroupBox, QLineEdit, QFormLayout, QMessageBox, QComboBox, QSpinBox, QCheckBox, QSlider, QTabWidget
+    QGroupBox, QLineEdit, QFormLayout, QMessageBox, QComboBox, QSpinBox, QCheckBox, QSlider, QTabWidget, QToolButton
 )
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
@@ -75,7 +75,7 @@ def _slug(s: str, max_len: int = 30) -> str:
     return s[:max_len].strip('-_')
 
 # ---------------- Widgets ----------------
-class ReadOnlyList(LISTWIDGET := QListWidget):
+class ReadOnlyList(QListWidget):
     """Solo muestra rutas; sin drag&drop del usuario."""
     def __init__(self):
         super().__init__()
@@ -233,7 +233,18 @@ class MainWin(QWidget):
         self.ed_mode = QLineEdit("hilbert")  # 'hilbert' o 'rms'
         self.ed_combine = QLineEdit("max")   # max/mean/geom_mean/product/sum_limited/weighted
         self.ed_weights = QLineEdit("")      # pesos opcionales separados por coma
+
+        # Campo de salida + botones "…" y "Abrir carpeta"
         self.ed_out = QLineEdit(str(Path.cwd() / "salida.wav"))
+        self.btn_browse_out = QToolButton()
+        self.btn_browse_out.setText("…")
+        self.btn_open_out_dir = QPushButton("Abrir carpeta")
+
+        out_row = QHBoxLayout()
+        out_row.addWidget(self.ed_out, 1)
+        out_row.addWidget(self.btn_browse_out)
+        out_row.addWidget(self.btn_open_out_dir)
+
         lf.addRow("BPM:", self.ed_bpm)
         lf.addRow("Attack ms:", self.ed_attack)
         lf.addRow("Release ms:", self.ed_release)
@@ -241,7 +252,8 @@ class MainWin(QWidget):
         lf.addRow("Envelope mode:", self.ed_mode)
         lf.addRow("Combine mode:", self.ed_combine)
         lf.addRow("Weights (coma):", self.ed_weights)
-        lf.addRow("Archivo de salida:", self.ed_out)
+        lf.addRow("Archivo de salida:", out_row)
+
         self.chk_auto_name = QCheckBox("Auto-nombrar salida (destino + moldes)")
         self.chk_auto_name.setChecked(True)
         lf.addRow(self.chk_auto_name)
@@ -277,6 +289,9 @@ class MainWin(QWidget):
         self._connect_player_signals()
         self.mold_list.currentItemChanged.connect(self.on_mold_item_changed)
         self.mold_list.itemDoubleClicked.connect(lambda _: self.on_play())
+        # Nuevos botones de salida
+        self.btn_browse_out.clicked.connect(self.browse_out_file)
+        self.btn_open_out_dir.clicked.connect(self.open_out_folder)
 
         # Inicializar con el primer género
         self.on_genre_changed()
@@ -533,6 +548,33 @@ class MainWin(QWidget):
         self.append_log(tb)
         QMessageBox.critical(self, "Error", "Ocurrió un error. Revisa los logs.")
 
+    # -------- abrir/cambiar carpeta/archivo de salida --------
+    def open_out_folder(self):
+        path_txt = self.ed_out.text().strip()
+        if not path_txt:
+            QMessageBox.warning(self, "Ruta vacía", "Primero especifica el archivo de salida.")
+            return
+        p = Path(path_txt)
+        folder = p if p.is_dir() else p.parent
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder.resolve())))
+
+    def browse_out_file(self):
+        # Directorio inicial: el de ed_out si existe, si no, cwd
+        start_path = self.ed_out.text().strip()
+        start_dir = str(Path(start_path).parent) if start_path else str(Path.cwd())
+        fname, _ = QFileDialog.getSaveFileName(
+            self,
+            "Elegir archivo de salida",
+            start_dir,
+            "Audio (*.wav *.mp3 *.flac *.ogg *.m4a *.aiff *.aif);;Todos los archivos (*.*)"
+        )
+        if fname:
+            self.ed_out.setText(fname)
+
 # ---------------- main ----------------
 def main():
     app = QApplication(sys.argv)
@@ -545,6 +587,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
